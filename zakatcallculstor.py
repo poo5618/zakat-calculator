@@ -13,14 +13,14 @@ CITY_SLUGS = {
     "Ahmedabad": "ahmedabad", "Patna": "patna", "Kerala": "kerala", "Nashik": "nashik"
 }
 
-# --- THE FIX: TELL WEBSITE WE ARE LINUX (MATCHES RENDER) ---
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'linux',  # <--- This prevents the block
-        'desktop': True
-    }
-)
+# --- THE FIX: DISGUISE AS GOOGLE BOT ---
+# We force the 'User-Agent' to look like Google's crawler.
+# Most sites whitelist this so they appear in search results.
+scraper = cloudscraper.create_scraper()
+GOOGLE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Referer": "https://www.google.com/"
+}
 
 def clean_price(text):
     try:
@@ -41,24 +41,26 @@ def fetch_gold_rate(city, carat):
         slug = CITY_SLUGS.get(city, 'delhi')
         url = f"https://www.goodreturns.in/gold-rates/{slug}.html"
         
-        # Add headers to look like a real user
-        headers = {"Referer": "https://www.google.com/"}
-        response = scraper.get(url, headers=headers)
+        # Use Google Bot Headers
+        response = scraper.get(url, headers=GOOGLE_HEADERS)
         
         if response.status_code != 200: return 0.0
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
+        # 1. Try Specific ID
         target_id = f"{carat}K-price"
         element = soup.find(id=target_id)
         if element: return clean_price(element.text)
         
+        # 2. Try 24K and calculate
         el_24 = soup.find(id="24K-price")
         if el_24:
             p24 = clean_price(el_24.text)
             if str(carat) == "22": return p24 * (22/24)
             elif str(carat) == "18": return p24 * (18/24)
             return p24
+        
         return 0.0
     except:
         return 0.0
@@ -68,15 +70,25 @@ def fetch_silver_rate(city):
         slug = CITY_SLUGS.get(city, 'delhi')
         url = f"https://www.goodreturns.in/silver-rates/{slug}.html"
         
-        headers = {"Referer": "https://www.google.com/"}
-        response = scraper.get(url, headers=headers)
+        # Use Google Bot Headers
+        response = scraper.get(url, headers=GOOGLE_HEADERS)
         
         if response.status_code != 200: return 0.0
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
+        # ID Strategy
         element = soup.find(id="silver-1g-price")
         if element: return clean_price(element.text)
+        
+        # Backup: Table Strategy
+        table_div = soup.find('div', {'class': 'gold_silver_table'})
+        if table_div:
+            rows = table_div.find_all('tr')
+            for row in rows:
+                if "1 gram" in row.text.lower() or "1 g" in row.text.lower():
+                    cols = row.find_all('td')
+                    if len(cols) > 1: return clean_price(cols[1].text)
         
         return 0.0
     except:
@@ -91,6 +103,7 @@ def get_initial_rates():
     data = request.json
     city = data.get('state', 'Delhi')
     user_carat = data.get('carat', '22')
+    
     return jsonify({
         "gold_rate_user": fetch_gold_rate(city, user_carat),
         "gold_rate_24k": fetch_gold_rate(city, '24'),
@@ -100,6 +113,7 @@ def get_initial_rates():
 @app.route('/calculate', methods=['POST'])
 def calculate():
     data = request.json
+    
     gold_weight = safe_float(data.get('gold_weight'))
     silver_weight = safe_float(data.get('silver_weight'))
     silver_val_input = safe_float(data.get('silver_value'))
@@ -127,6 +141,7 @@ def calculate():
             is_eligible = True
             zakat_payable = net_worth * 0.025
     elif net_worth > 0:
+        # Fallback if rates failed
         is_eligible = True
         zakat_payable = net_worth * 0.025
 
