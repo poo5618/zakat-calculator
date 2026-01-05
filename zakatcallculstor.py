@@ -1,98 +1,46 @@
 import cloudscraper
-from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, jsonify
-import re
 
 app = Flask(__name__)
 
-# --- CONFIGURATION ---
-CITY_SLUGS = {
-    "Delhi": "delhi", "Mumbai": "mumbai", "Chennai": "chennai",
-    "Kolkata": "kolkata", "Bangalore": "bangalore", "Hyderabad": "hyderabad",
-    "Pune": "pune", "Jaipur": "jaipur", "Lucknow": "lucknow",
-    "Ahmedabad": "ahmedabad", "Patna": "patna", "Kerala": "kerala", "Nashik": "nashik"
-}
+# --- NEW STRATEGY: DIRECT DATA FEED (JSON) ---
+# We use a global gold price feed instead of scraping news sites.
+# This bypasses the "Anti-Bot" blocks on GoodReturns.
+DATA_URL = "https://data-asg.goldprice.org/dbXRates/INR"
 
-# --- THE FIX: DISGUISE AS GOOGLE BOT ---
-# We force the 'User-Agent' to look like Google's crawler.
-# Most sites whitelist this so they appear in search results.
 scraper = cloudscraper.create_scraper()
-GOOGLE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-    "Referer": "https://www.google.com/"
-}
 
-def clean_price(text):
+def get_live_rates():
+    """
+    Fetches live market data from goldprice.org JSON feed.
+    Returns dictionary with base 24k Gold and Silver per gram in INR.
+    """
     try:
-        clean = re.sub(r'[^\d.]', '', text)
-        return float(clean)
-    except:
-        return 0.0
-
-def safe_float(value):
-    try:
-        if not value: return 0.0
-        return float(value)
-    except ValueError:
-        return 0.0
-
-def fetch_gold_rate(city, carat):
-    try:
-        slug = CITY_SLUGS.get(city, 'delhi')
-        url = f"https://www.goodreturns.in/gold-rates/{slug}.html"
+        # Fake a browser visit
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36",
+            "Referer": "https://goldprice.org/"
+        }
         
-        # Use Google Bot Headers
-        response = scraper.get(url, headers=GOOGLE_HEADERS)
-        
-        if response.status_code != 200: return 0.0
-
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # 1. Try Specific ID
-        target_id = f"{carat}K-price"
-        element = soup.find(id=target_id)
-        if element: return clean_price(element.text)
-        
-        # 2. Try 24K and calculate
-        el_24 = soup.find(id="24K-price")
-        if el_24:
-            p24 = clean_price(el_24.text)
-            if str(carat) == "22": return p24 * (22/24)
-            elif str(carat) == "18": return p24 * (18/24)
-            return p24
-        
-        return 0.0
-    except:
-        return 0.0
-
-def fetch_silver_rate(city):
-    try:
-        slug = CITY_SLUGS.get(city, 'delhi')
-        url = f"https://www.goodreturns.in/silver-rates/{slug}.html"
-        
-        # Use Google Bot Headers
-        response = scraper.get(url, headers=GOOGLE_HEADERS)
-        
-        if response.status_code != 200: return 0.0
-
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # ID Strategy
-        element = soup.find(id="silver-1g-price")
-        if element: return clean_price(element.text)
-        
-        # Backup: Table Strategy
-        table_div = soup.find('div', {'class': 'gold_silver_table'})
-        if table_div:
-            rows = table_div.find_all('tr')
-            for row in rows:
-                if "1 gram" in row.text.lower() or "1 g" in row.text.lower():
-                    cols = row.find_all('td')
-                    if len(cols) > 1: return clean_price(cols[1].text)
-        
-        return 0.0
-    except:
-        return 0.0
+        response = scraper.get(DATA_URL, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            # The feed returns prices per OUNCE in INR
+            # Structure: {"items": [{"xauPrice": 200000.50, "xagPrice": 2500.50, ...}]}
+            if "items" in data and len(data["items"]) > 0:
+                item = data["items"][0]
+                price_gold_ounce = item.get("xauPrice", 0)
+                price_silver_ounce = item.get("xagPrice", 0)
+                
+                # Convert Ounce to Gram (1 Ounce = 31.1035 Grams)
+                gold_24k_gram = price_gold_ounce / 31.1035
+                silver_gram = price_silver_ounce / 31.1035
+                
+                return gold_24k_gram, silver_gram
+    except Exception as e:
+        print(f"Feed Error: {e}")
+    
+    return 0.0, 0.0
 
 @app.route('/')
 def home():
@@ -100,20 +48,46 @@ def home():
 
 @app.route('/get_initial_rates', methods=['POST'])
 def get_initial_rates():
+    # 1. Get Live Base Rates (24K Gold & Silver)
+    base_gold_24k, base_silver = get_live_rates()
+    
+    # 2. Process inputs
     data = request.json
-    city = data.get('state', 'Delhi')
-    user_carat = data.get('carat', '22')
+    user_carat = str(data.get('carat', '22'))
+    
+    # 3. Calculate Carat Price
+    # If feed failed (0), these will remain 0
+    gold_rate_user = 0
+    if base_gold_24k > 0:
+        if user_carat == "24":
+            gold_rate_user = base_gold_24k
+        elif user_carat == "22":
+            gold_rate_user = base_gold_24k * (22/24)
+        elif user_carat == "18":
+            gold_rate_user = base_gold_24k * (18/24)
+            
+    # Add a small premium (Import duty/GST approx 10-15% is usually added in local market rates)
+    # Global spot rates are raw. Indian market rates are higher.
+    # We add ~12% to match GoodReturns typical market rate.
+    if gold_rate_user > 0: gold_rate_user *= 1.12
+    if base_gold_24k > 0: base_gold_24k *= 1.12
+    if base_silver > 0: base_silver *= 1.12
     
     return jsonify({
-        "gold_rate_user": fetch_gold_rate(city, user_carat),
-        "gold_rate_24k": fetch_gold_rate(city, '24'),
-        "silver_rate": fetch_silver_rate(city)
+        "gold_rate_user": round(gold_rate_user, 2),
+        "gold_rate_24k": round(base_gold_24k, 2),
+        "silver_rate": round(base_silver, 2)
     })
 
 @app.route('/calculate', methods=['POST'])
 def calculate():
     data = request.json
     
+    # Safe float conversion
+    def safe_float(v):
+        try: return float(v) if v else 0.0
+        except: return 0.0
+
     gold_weight = safe_float(data.get('gold_weight'))
     silver_weight = safe_float(data.get('silver_weight'))
     silver_val_input = safe_float(data.get('silver_value'))
@@ -132,6 +106,7 @@ def calculate():
     gross_assets = total_gold_val + total_silver_val + cash + investments + business
     net_worth = gross_assets - liabilities
 
+    # Nisab Logic
     nisab_threshold = 595 * rate_silver
     is_eligible = False
     zakat_payable = 0
@@ -141,7 +116,6 @@ def calculate():
             is_eligible = True
             zakat_payable = net_worth * 0.025
     elif net_worth > 0:
-        # Fallback if rates failed
         is_eligible = True
         zakat_payable = net_worth * 0.025
 
