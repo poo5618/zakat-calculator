@@ -46,27 +46,15 @@
                 <div class="section-box">
                     <div class="section-title">1. Gold <span id="goldRateDisplay" class="rate-badge">Rate: ...</span></div>
                     <div class="row g-2">
-                        <div class="col-6">
-                            <label class="form-label small">City</label>
-                            <select class="form-select form-select-sm" id="state" onchange="fetchRates()">
-                                <option value="Delhi">Delhi</option>
-                                <option value="Mumbai">Mumbai</option>
-                                <option value="Hyderabad">Hyderabad</option>
-                                <option value="Bangalore">Bangalore</option>
-                                <option value="Chennai">Chennai</option>
-                                <option value="Kolkata">Kolkata</option>
-                                <option value="Pune">Pune</option>
-                                <option value="Lucknow">Lucknow</option>
-                            </select>
-                        </div>
-                        <div class="col-6">
-                            <label class="form-label small">Carat</label>
-                            <select class="form-select form-select-sm" id="carat" onchange="fetchRates()">
+                        <div class="col-12">
+                            <label class="form-label small">Select Karat</label>
+                            <select class="form-select" id="carat" onchange="fetchRates()">
                                 <option value="24">24 Karat</option>
                                 <option value="22" selected>22 Karat</option>
                                 <option value="18">18 Karat</option>
                             </select>
                         </div>
+                        
                         <div class="col-12 mt-2">
                             <label class="form-label">Weight (Grams)</label>
                             <input type="number" class="form-control" id="gold_weight" placeholder="0" oninput="updateLiveTotals()">
@@ -160,8 +148,8 @@
         badge.innerText = "Fetching Rates...";
         badge.className = "badge bg-warning text-dark";
 
+        // No State needed anymore
         const data = {
-            state: document.getElementById('state').value,
             carat: document.getElementById('carat').value
         };
 
@@ -173,19 +161,18 @@
             });
             const result = await res.json();
 
-            // Store rates in hidden inputs
+            // Store rates
             document.getElementById('rate_gold_user').value = result.gold_rate_user;
             document.getElementById('rate_gold_24k').value = result.gold_rate_24k;
             document.getElementById('rate_silver').value = result.silver_rate;
 
-            // Update UI Badges
+            // Update UI
             document.getElementById('goldRateDisplay').innerText = "₹ " + result.gold_rate_user.toLocaleString() + "/g";
             document.getElementById('silverRateDisplay').innerText = "₹ " + result.silver_rate.toLocaleString() + "/g";
             
             badge.innerText = "Rates Live";
             badge.className = "badge bg-success";
 
-            // Recalculate live totals if user already typed something
             updateLiveTotals();
 
         } catch (e) {
@@ -195,7 +182,7 @@
         }
     }
 
-    // 2. LIVE CALCULATIONS (Client Side for Speed)
+    // 2. LIVE CALCULATIONS
     function updateLiveTotals() {
         const goldWeight = parseFloat(document.getElementById('gold_weight').value) || 0;
         const goldRate = parseFloat(document.getElementById('rate_gold_user').value) || 0;
@@ -208,10 +195,9 @@
         const totalGold = goldWeight * goldRate;
         document.getElementById('gold_live_val').innerText = "Value: ₹ " + totalGold.toLocaleString('en-IN');
 
-        // Silver Math (If weight entered, override value display)
+        // Silver Math
         if (silverWeight > 0) {
             silverVal = silverWeight * silverRate;
-            // Optionally update the input box: document.getElementById('silver_value').value = silverVal;
         }
         document.getElementById('silver_live_val').innerText = "Value: ₹ " + silverVal.toLocaleString('en-IN');
     }
@@ -245,7 +231,6 @@
         const detailsBox = document.getElementById('paymentDetails');
 
         if (result.is_eligible) {
-            // Eligible
             statusBox.innerText = "You are eligible for Zakat.";
             statusBox.className = "status-msg status-success";
             detailsBox.style.display = 'block';
@@ -254,16 +239,12 @@
             document.getElementById('displayZakat').innerText = "₹ " + result.zakat_payable.toLocaleString('en-IN');
             document.getElementById('displayNisab').innerText = result.nisab_threshold.toLocaleString('en-IN');
         } else {
-            // Not Eligible
             statusBox.innerText = "No Zakat Due. Your Net Worth is below the Nisab threshold.";
             statusBox.className = "status-msg status-fail";
             detailsBox.style.display = 'none';
-            
-            // Optional: Show why
-            statusBox.innerText += ` (Threshold: ₹${result.nisab_threshold.toLocaleString('en-IN')})`;
         }
     }
 </script>
 
 </body>
-</html>
+                </html>
